@@ -14,6 +14,7 @@ void monitor_init(monitor_state_t *state)
     memset(state, 0, sizeof(*state));
     pthread_mutex_init(&state->lock, NULL);
     state->start_time = time(NULL);
+    state->http_listen_fd = -1;
     state->running = 1;
 }
 

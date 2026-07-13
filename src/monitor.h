@@ -13,6 +13,7 @@ typedef struct {
     int stream_lost;
     time_t start_time;
     int recording;
+    int http_listen_fd;
     volatile int running;
 } monitor_state_t;
 

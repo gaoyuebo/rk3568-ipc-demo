@@ -18,6 +18,7 @@ static void on_signal(int sig)
     (void)sig;
     g_running = 0;
     g_monitor.running = 0;
+    http_server_stop(&g_monitor);
 }
 
 static void *video_pipeline_thread(void *arg)
@@ -160,6 +161,9 @@ int main(int argc, char *argv[])
 
     g_running = 0;
     g_monitor.running = 0;
+    if (enable_http) {
+        http_server_stop(&g_monitor);
+    }
 
     pthread_join(pipeline_tid, NULL);
     pthread_join(monitor_tid, NULL);

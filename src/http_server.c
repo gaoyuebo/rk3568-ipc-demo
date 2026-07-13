@@ -1,7 +1,9 @@
 #include "http_server.h"
 
 #include <arpa/inet.h>
+#include <errno.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -59,6 +61,19 @@ static void handle_request(int client, monitor_state_t *state, const char *req)
     http_send_response(client, 404, "{\"error\":\"not found\"}");
 }
 
+void http_server_stop(monitor_state_t *state)
+{
+    int fd;
+
+    pthread_mutex_lock(&state->lock);
+    fd = state->http_listen_fd;
+    pthread_mutex_unlock(&state->lock);
+
+    if (fd >= 0) {
+        shutdown(fd, SHUT_RDWR);
+    }
+}
+
 void *http_server_thread(void *arg)
 {
     monitor_state_t *state = arg;
@@ -93,12 +108,37 @@ void *http_server_thread(void *arg)
 
     monitor_log("[http] server listening on port %d", HTTP_PORT);
 
+    pthread_mutex_lock(&state->lock);
+    state->http_listen_fd = server_fd;
+    pthread_mutex_unlock(&state->lock);
+
     while (state->running) {
-        int client = accept(server_fd, NULL, NULL);
+        struct pollfd pfd = {
+            .fd = server_fd,
+            .events = POLLIN,
+        };
+        int client;
         char buf[1024];
         ssize_t n;
+        int pr;
 
+        pr = poll(&pfd, 1, 1000);
+        if (pr < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            break;
+        }
+
+        if (pr == 0) {
+            continue;
+        }
+
+        client = accept(server_fd, NULL, NULL);
         if (client < 0) {
+            if (!state->running) {
+                break;
+            }
             continue;
         }
 
@@ -111,6 +151,10 @@ void *http_server_thread(void *arg)
         close(client);
     }
 
+    pthread_mutex_lock(&state->lock);
+    state->http_listen_fd = -1;
+    pthread_mutex_unlock(&state->lock);
     close(server_fd);
+    monitor_log("[http] server stopped");
     return NULL;
 }
