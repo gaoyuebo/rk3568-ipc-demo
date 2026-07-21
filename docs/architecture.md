@@ -54,7 +54,10 @@ main
 | 模块 | 文件 | 说明 |
 |------|------|------|
 | V4L2 采集 | v4l2_capture.c | mmap 4 buffer，循环 DQBUF 取帧 |
-| 监控 | monitor.c | 帧率统计、断流检测、重连、日志 |
+| GStreamer 录像/推流 | gst_recorder.c | appsrc 喂帧；录像 mp4mux；推流 rtspclientsink |
+| MediaMTX 管理 | mediamtx_manager.c | fork/exec 启动 RTSP 服务，退出时清理 |
+| 应用状态 | app_state.c | 录像/推流状态同步，重建 GStreamer pipeline |
+| 监控 | monitor.c | 帧率统计、断流检测、日志 |
 | HTTP API | http_server.c | /status、/record/start、/record/stop |
 | 主程序 | main.c | 多线程调度、信号处理 |
 
@@ -65,4 +68,6 @@ main
 | GET /status | 返回 fps、是否录像、运行时长 |
 | POST /record/start | 开始录像 |
 | POST /record/stop | 停止录像 |
+| POST /stream/start | 启动 MediaMTX + RTSP 推流 |
+| POST /stream/stop | 停止 RTSP 推流 |
 | POST /config?width=&height= | 改分辨率 |

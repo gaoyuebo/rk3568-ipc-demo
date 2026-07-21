@@ -13,6 +13,33 @@ VIDIOC_STREAMON    — 开始采集
 VIDIOC_STREAMOFF   — 停止采集
 ```
 
+## GStreamer C API 录像 pipeline（阶段 A）
+
+```
+V4L2 mmap YUYV
+    ↓ memcpy
+appsrc (do-timestamp=true)
+    ↓
+videoconvert → x264enc → mp4mux → filesink
+```
+
+## GStreamer C API RTSP 推流（阶段 B）
+
+```
+V4L2 mmap YUYV
+    ↓ memcpy
+appsrc → x264enc → rtspclientsink → MediaMTX(:8554/live) → VLC
+```
+
+同时录像 + 推流：
+
+```
+appsrc → x264enc → tee → mp4mux → filesink
+                  └→ rtspclientsink → MediaMTX
+```
+
+MediaMTX 由 `mediamtx_manager.c` 在 C 里 fork/exec 启动。
+
 ## GStreamer 常用 pipeline
 
 ```bash

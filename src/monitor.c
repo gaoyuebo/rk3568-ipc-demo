@@ -69,8 +69,8 @@ void *monitor_thread(void *arg)
             }
         }
 
-        monitor_log("[monitor] fps=%d recording=%d stream_lost=%d",
-                    state->fps, state->recording, state->stream_lost);
+        monitor_log("[monitor] fps=%d recording=%d streaming=%d stream_lost=%d",
+                    state->fps, state->recording, state->streaming, state->stream_lost);
         pthread_mutex_unlock(&state->lock);
     }
 

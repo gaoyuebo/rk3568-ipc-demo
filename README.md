@@ -4,12 +4,12 @@
 
 ## 功能
 
-- [ ] V4L2 mmap 采集（YUYV）
-- [ ] GStreamer H264 编码（x264 软编 / MPP 硬编）
-- [ ] MP4 本地录像
-- [ ] RTSP 推流（VLC 预览）
-- [ ] 帧率统计、断流检测与重连
-- [ ] HTTP API 设备控制（可选）
+- [x] V4L2 mmap 采集（YUYV）
+- [x] GStreamer C API 录 MP4（appsrc → x264enc → mp4mux）
+- [x] GStreamer C API RTSP 推流（rtspclientsink → MediaMTX）
+- [ ] MPP 硬编（可选）
+- [x] 帧率统计、断流检测
+- [x] HTTP API + Web 设备管理页（录像控制已接入 GStreamer）
 
 ## 硬件
 
@@ -29,9 +29,15 @@ rk3568-ipc-demo/
 │   └── notes.md
 ├── src/
 │   ├── v4l2_capture.c
+│   ├── gst_recorder.c
+│   ├── mediamtx_manager.c
+│   ├── app_state.c
 │   ├── main.c
 │   ├── monitor.c
 │   └── http_server.c
+├── web/
+│   ├── index.html
+│   └── app.js
 ├── scripts/
 │   ├── install_deps.sh
 │   ├── gst_record.sh
@@ -51,6 +57,12 @@ chmod +x scripts/*.sh
 
 ### 2. 编译
 
+需要 GStreamer 开发包（`install_deps.sh` 已包含）：
+
+```bash
+sudo apt install -y libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+```
+
 ```bash
 # 板子上 native 编译
 make
@@ -58,7 +70,7 @@ make
 # Ubuntu 18.04 虚拟机交叉编译
 make cross
 # 或
-make CC=aarch64-linux-gnu-gcc
+make CC=aarch64-linux-gnu-gcc PKG_CONFIG=aarch64-linux-gnu-pkg-config
 ```
 
 ### 3. 运行 V4L2 采帧
@@ -69,22 +81,72 @@ make CC=aarch64-linux-gnu-gcc
 ./capture -w 640 -h 480 -n 100 -o test.yuv
 ```
 
-### 4. GStreamer 录 MP4
+### 4. GStreamer 录 MP4（C 主链路）
+
+V4L2 mmap 采帧 → `appsrc` → `x264enc` → `mp4mux` → MP4 文件。
+
+```bash
+# 命令行直接录像
+./capture -r test.mp4
+
+# 采 300 帧并录像
+./capture -n 300 -r /tmp/test.mp4
+
+# HTTP 控制录像（默认写到 /tmp/ipc_demo.mp4）
+export IPC_DEMO_RECORD_PATH=/tmp/manual.mp4
+./capture
+# 浏览器 http://<板子IP>:8080/ 点「开始录像」
+```
+
+脚本方式仍可用于对照调试：
 
 ```bash
 ./scripts/gst_record.sh /dev/video10 test.mp4
-# 或省略设备参数（默认 /dev/video10）
-./scripts/gst_record.sh
 ```
 
-### 5. RTSP 推流
+### 5. RTSP 推流（C 主链路，阶段 B）
+
+单进程：`V4L2 mmap` → `appsrc` → `x264enc` → `rtspclientsink` → **MediaMTX** → VLC。
+
+```bash
+# 启动采集 + RTSP 推流（自动拉起 MediaMTX）
+./capture --stream
+
+# 同时录像 + 推流（tee 一分二）
+./capture --stream -r /tmp/test.mp4
+
+# HTTP 控制推流
+./capture
+curl -X POST http://127.0.0.1:8080/stream/start
+# PC VLC: rtsp://<板子IP>:8554/live
+curl -X POST http://127.0.0.1:8080/stream/stop
+```
+
+环境变量：`RTSP_PATH`（默认 `live`）、`RTSP_PORT`（默认 `8554`）、`IPC_DEMO_SCRIPT_DIR`（scripts 目录）
+
+脚本方式仍可用于对照调试：
 
 ```bash
 ./scripts/rtsp_push.sh /dev/video10
-# 或
-./scripts/rtsp_push.sh
-# PC 端 VLC 打开: rtsp://<板子IP>:8554/live
 ```
+
+### 6. 浏览器看状态（设备管理页）
+
+在项目根目录运行（需能访问 `web/` 目录）：
+
+```bash
+./capture
+# 浏览器打开: http://<板子IP>:8080/
+```
+
+若从其他目录运行，可指定 web 目录：
+
+```bash
+export IPC_DEMO_WEB_DIR=/path/to/rk3568-ipc-demo/web
+./capture
+```
+
+页面功能：fps、运行时长、断流状态、录像控制。实时画面请用 VLC + RTSP。
 
 ## 架构
 
