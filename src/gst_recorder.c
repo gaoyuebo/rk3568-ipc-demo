@@ -13,7 +13,7 @@ static int gst_recorder_wait_eos(GstElement *pipeline)
     GstMessage *msg;
 
     bus = gst_element_get_bus(pipeline);
-    msg = gst_bus_timed_pop_filtered(bus, 10 * GST_SECOND,
+    msg = gst_bus_timed_pop_filtered(bus, 5 * GST_SECOND,
                                      GST_MESSAGE_EOS | GST_MESSAGE_ERROR);
     if (!msg) {
         fprintf(stderr, "[gst] wait EOS timeout\n");
@@ -83,26 +83,23 @@ static int gst_recorder_build_pipeline_locked(gst_recorder_t *rec,
              "x264enc tune=zerolatency speed-preset=ultrafast bitrate=600 key-int-max=%d",
              rec->fps);
 
-    /* h264parse + mp4mux faststart: finalize writes moov so Windows players work */
     if (record_path && rtsp_url) {
         snprintf(pipeline_desc, sizeof(pipeline_desc),
                  "appsrc name=recsrc is-live=true format=time do-timestamp=true ! "
                  "%s ! tee name=t ! "
-                 "queue ! h264parse ! mp4mux faststart=true ! "
-                 "filesink location=\"%s\" sync=false "
-                 "t. ! queue ! h264parse ! video/x-h264,stream-format=byte-stream,profile=baseline ! "
+                 "queue ! mp4mux ! filesink location=\"%s\" sync=false "
+                 "t. ! queue ! video/x-h264,profile=baseline ! "
                  "rtspclientsink name=rssink location=\"%s\" protocols=tcp",
                  encode_part, record_path, rtsp_url);
     } else if (record_path) {
         snprintf(pipeline_desc, sizeof(pipeline_desc),
                  "appsrc name=recsrc is-live=true format=time do-timestamp=true ! "
-                 "%s ! h264parse ! mp4mux faststart=true ! "
-                 "filesink location=\"%s\" sync=false",
+                 "%s ! mp4mux ! filesink location=\"%s\" sync=false",
                  encode_part, record_path);
     } else if (rtsp_url) {
         snprintf(pipeline_desc, sizeof(pipeline_desc),
                  "appsrc name=recsrc is-live=true format=time do-timestamp=true ! "
-                 "%s ! h264parse ! video/x-h264,stream-format=byte-stream,profile=baseline ! "
+                 "%s ! video/x-h264,profile=baseline ! "
                  "rtspclientsink name=rssink location=\"%s\" protocols=tcp",
                  encode_part, rtsp_url);
     } else {
@@ -208,14 +205,10 @@ int gst_recorder_apply(gst_recorder_t *rec,
         return gst_recorder_stop(rec);
     }
 
-    /* Rebuild must EOS-finalize first, or an in-progress MP4 has no moov atom. */
     pthread_mutex_lock(&rec->lock);
+
     if (rec->active) {
-        pthread_mutex_unlock(&rec->lock);
-        if (gst_recorder_stop(rec) < 0) {
-            fprintf(stderr, "[gst] finalize previous pipeline failed\n");
-        }
-        pthread_mutex_lock(&rec->lock);
+        gst_recorder_clear_locked(rec);
     }
 
     rec->width = width;
@@ -321,13 +314,10 @@ int gst_recorder_stop(gst_recorder_t *rec)
     if (appsrc) {
         gst_app_src_end_of_stream(GST_APP_SRC(appsrc));
     }
-    /* Stop accepting new frames after EOS so mp4mux can finalize cleanly. */
-    rec->active = 0;
 
     pthread_mutex_unlock(&rec->lock);
 
     if (gst_recorder_wait_eos(pipeline) < 0) {
-        fprintf(stderr, "[gst] EOS wait failed, forcing pipeline down\n");
         ret = -1;
     }
 
@@ -339,8 +329,7 @@ int gst_recorder_stop(gst_recorder_t *rec)
 
     gst_object_unref(pipeline);
 
-    fprintf(stderr, "[gst] pipeline stopped%s\n",
-            ret < 0 ? " (finalize may be incomplete)" : "");
+    fprintf(stderr, "[gst] pipeline stopped\n");
     return ret;
 }
 
