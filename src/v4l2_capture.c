@@ -45,6 +45,7 @@ int v4l2_capture_open(v4l2_capture_t *cap, const char *device,
 
     memset(cap, 0, sizeof(*cap));
     cap->fd = -1;
+    cap->held_index = -1;
 
     cap->fd = open(device, O_RDWR | O_NONBLOCK, 0);
     if (cap->fd < 0) {
@@ -82,6 +83,24 @@ int v4l2_capture_open(v4l2_capture_t *cap, const char *device,
     cap->width = (int)fmt.fmt.pix.width;
     cap->height = (int)fmt.fmt.pix.height;
     cap->pixfmt = fmt.fmt.pix.pixelformat;
+    cap->bytesperline = fmt.fmt.pix.bytesperline;
+
+    if (cap->pixfmt != pixfmt) {
+        fprintf(stderr,
+                "[v4l2] requested pixfmt %.4s, driver selected %.4s\n",
+                (char *)&pixfmt, (char *)&cap->pixfmt);
+    }
+    fprintf(stderr, "[v4l2] %dx%d pixfmt=%.4s bytesperline=%u sizeimage=%u\n",
+            cap->width, cap->height, (char *)&cap->pixfmt,
+            cap->bytesperline, fmt.fmt.pix.sizeimage);
+
+    /* appsrc caps assume tightly packed YUY2 (width*2). Stride padding breaks that. */
+    if (cap->pixfmt == V4L2_PIX_FMT_YUYV &&
+        cap->bytesperline != (unsigned int)cap->width * 2) {
+        fprintf(stderr,
+                "[v4l2] warning: YUYV stride %u != width*2 (%d); MP4 may be corrupt/black\n",
+                cap->bytesperline, cap->width * 2);
+    }
 
     memset(&req, 0, sizeof(req));
     req.count = V4L2_BUFFER_COUNT;
@@ -157,9 +176,40 @@ int v4l2_capture_start(v4l2_capture_t *cap)
     return 0;
 }
 
+static int v4l2_capture_requeue_held(v4l2_capture_t *cap)
+{
+    struct v4l2_buffer buf;
+
+    if (!cap || cap->held_index < 0) {
+        return 0;
+    }
+
+    memset(&buf, 0, sizeof(buf));
+    buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    buf.memory = V4L2_MEMORY_MMAP;
+    buf.index = (unsigned int)cap->held_index;
+
+    if (xioctl(cap->fd, VIDIOC_QBUF, &buf) < 0) {
+        fprintf(stderr, "VIDIOC_QBUF failed: %s\n", strerror(errno));
+        return -1;
+    }
+
+    cap->held_index = -1;
+    return 0;
+}
+
 int v4l2_capture_read_frame(v4l2_capture_t *cap, void **data, size_t *size)
 {
     struct v4l2_buffer buf;
+
+    /*
+     * Requeue the previously lent buffer first. The caller may still be
+     * reading the last frame until this call; after DQBUF below, that old
+     * pointer must not be used.
+     */
+    if (v4l2_capture_requeue_held(cap) < 0) {
+        return -1;
+    }
 
     memset(&buf, 0, sizeof(buf));
     buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -180,11 +230,8 @@ int v4l2_capture_read_frame(v4l2_capture_t *cap, void **data, size_t *size)
         *size = buf.bytesused;
     }
 
-    if (xioctl(cap->fd, VIDIOC_QBUF, &buf) < 0) {
-        fprintf(stderr, "VIDIOC_QBUF failed: %s\n", strerror(errno));
-        return -1;
-    }
-
+    /* Keep buffer dequeued until next read/stop so memcpy sees stable data. */
+    cap->held_index = (int)buf.index;
     return 0;
 }
 
@@ -196,11 +243,14 @@ void v4l2_capture_stop(v4l2_capture_t *cap)
         return;
     }
 
+    (void)v4l2_capture_requeue_held(cap);
+
     if (xioctl(cap->fd, VIDIOC_STREAMOFF, &type) < 0) {
         fprintf(stderr, "VIDIOC_STREAMOFF failed: %s\n", strerror(errno));
     }
 
     cap->streaming = 0;
+    cap->held_index = -1;
 }
 
 void v4l2_capture_close(v4l2_capture_t *cap)

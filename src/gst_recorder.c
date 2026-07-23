@@ -72,16 +72,20 @@ static int gst_recorder_build_pipeline_locked(gst_recorder_t *rec,
                                               const char *rtsp_url)
 {
     char pipeline_desc[1024];
-    char encode_part[256];
+    char encode_part[384];
     GstCaps *caps;
     GError *err = NULL;
     GstState state;
     GstStateChangeReturn ret;
 
+    /* Baseline + avc + h264parse: compatible with Windows Movies & TV / WMP. */
     snprintf(encode_part, sizeof(encode_part),
-             "videoconvert ! "
-             "x264enc tune=zerolatency speed-preset=ultrafast bitrate=600 key-int-max=%d",
-             rec->fps);
+             "videoconvert ! video/x-raw,format=I420 ! "
+             "x264enc speed-preset=veryfast tune=zerolatency "
+             "bframes=0 byte-stream=false bitrate=800 key-int-max=%d ! "
+             "video/x-h264,profile=baseline,stream-format=avc ! "
+             "h264parse config-interval=-1",
+             rec->fps > 0 ? rec->fps * 2 : 30);
 
     if (record_path && rtsp_url) {
         snprintf(pipeline_desc, sizeof(pipeline_desc),
@@ -274,9 +278,11 @@ int gst_recorder_start_stream(gst_recorder_t *rec, const char *rtsp_url,
 
 int gst_recorder_push_frame(gst_recorder_t *rec, const void *data, size_t size)
 {
+    GstElement *appsrc = NULL;
     GstBuffer *buffer;
     GstFlowReturn flow;
     GstMapInfo map;
+    size_t expect;
     int ret = 0;
 
     if (!rec || !data || size == 0) {
@@ -289,30 +295,41 @@ int gst_recorder_push_frame(gst_recorder_t *rec, const void *data, size_t size)
         return 0;
     }
 
-    buffer = gst_buffer_new_allocate(NULL, size, NULL);
+    expect = (size_t)rec->width * (size_t)rec->height * 2;
+    if (size < expect) {
+        fprintf(stderr, "[gst] frame too small: got %zu expect %zu\n", size, expect);
+        pthread_mutex_unlock(&rec->lock);
+        return -1;
+    }
+
+    appsrc = GST_ELEMENT(gst_object_ref(rec->appsrc));
+    pthread_mutex_unlock(&rec->lock);
+
+    buffer = gst_buffer_new_allocate(NULL, expect, NULL);
     if (!buffer) {
         fprintf(stderr, "[gst] alloc buffer failed\n");
-        pthread_mutex_unlock(&rec->lock);
+        gst_object_unref(appsrc);
         return -1;
     }
 
     if (!gst_buffer_map(buffer, &map, GST_MAP_WRITE)) {
         fprintf(stderr, "[gst] map buffer failed\n");
         gst_buffer_unref(buffer);
-        pthread_mutex_unlock(&rec->lock);
+        gst_object_unref(appsrc);
         return -1;
     }
 
-    memcpy(map.data, data, size);
+    /* Caps are tightly packed YUY2; ignore any trailing padding in bytesused. */
+    memcpy(map.data, data, expect);
     gst_buffer_unmap(buffer, &map);
 
-    flow = gst_app_src_push_buffer(GST_APP_SRC(rec->appsrc), buffer);
+    flow = gst_app_src_push_buffer(GST_APP_SRC(appsrc), buffer);
     if (flow != GST_FLOW_OK) {
         fprintf(stderr, "[gst] push buffer failed: %s\n", gst_flow_get_name(flow));
         ret = -1;
     }
 
-    pthread_mutex_unlock(&rec->lock);
+    gst_object_unref(appsrc);
     return ret;
 }
 
