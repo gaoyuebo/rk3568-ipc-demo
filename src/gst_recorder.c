@@ -142,10 +142,35 @@ static int gst_recorder_build_pipeline_locked(gst_recorder_t *rec,
         return -1;
     }
 
+    /*
+     * Live appsrc often returns ASYNC and stays in PAUSED until the first
+     * buffers arrive. Capture only pushes after active=1, and we still hold
+     * rec->lock here, so waiting for PLAYING would deadlock. Accept PAUSED.
+     */
     ret = gst_element_get_state((GstElement *)rec->pipeline, &state, NULL,
-                                5 * GST_SECOND);
-    if (ret == GST_STATE_CHANGE_FAILURE || state != GST_STATE_PLAYING) {
-        fprintf(stderr, "[gst] pipeline not playing\n");
+                                2 * GST_SECOND);
+    if (ret == GST_STATE_CHANGE_FAILURE || state < GST_STATE_PAUSED) {
+        GstBus *bus = gst_element_get_bus((GstElement *)rec->pipeline);
+        GstMessage *msg = gst_bus_pop_filtered(bus, GST_MESSAGE_ERROR);
+
+        if (msg) {
+            GError *err2 = NULL;
+            gchar *dbg = NULL;
+
+            gst_message_parse_error(msg, &err2, &dbg);
+            fprintf(stderr, "[gst] not playing: %s\n",
+                    err2 ? err2->message : "unknown");
+            if (dbg) {
+                fprintf(stderr, "[gst] debug: %s\n", dbg);
+            }
+            g_clear_error(&err2);
+            g_free(dbg);
+            gst_message_unref(msg);
+        } else {
+            fprintf(stderr, "[gst] pipeline not playing, state=%d ret=%d\n",
+                    (int)state, (int)ret);
+        }
+        gst_object_unref(bus);
         gst_recorder_clear_locked(rec);
         return -1;
     }
